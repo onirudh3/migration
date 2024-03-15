@@ -6,3 +6,8 @@
 # Migration flow data -----------------------------------------------------
 
 load("mig_data.RData")
+
+plot(st_geometry(contours))
+
+contours[vars]
+class(contours)

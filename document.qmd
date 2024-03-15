@@ -1,0 +1,142 @@
+---
+title: "Project in Spatial Econometrics"
+subtitle: "Toulouse School of Economics, Master 2 EEE"
+author: "Anirudh Ravishankar"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+format:
+  html:
+    toc: true
+    number-sections: true
+    embed-resources: true
+---
+
+# Data
+
+First I will load the relevant libraries.
+
+```{r, results='hide', warning=FALSE, message=FALSE}
+library(dplyr)
+library(sf)
+library(missForest)
+library(corrplot)
+library(ggplot2)
+```
+
+Some housekeeping.
+
+```{r}
+options(scipen = 999) # Forbid scientific notation
+```
+
+## Migration flow data
+
+```{r}
+load("mig_data.RData")
+mig_data <- subset(mig_data, period == "2015-2020") # Reference period is 2015-2020
+```
+
+## Contours data
+
+Import the [shapefile data](https://public.opendatasoft.com/api/explore/v2.1/catalog/datasets/world-administrative-boundaries/exports/shp?lang=en&timezone=Europe%2FBerlin) and transform the coordinate reference system.
+
+```{r}
+contours <- read_sf("world-administrative-boundaries/world-administrative-boundaries.shp")
+contours <- st_transform(contours, "ESRI:54030")
+contours <- contours %>% rename("CountryCode" = "iso3")
+```
+
+## Explanatory variables at country level
+
+```{r}
+load("covariates.RData")
+```
+
+Impute missing data using random forest.
+
+```{r}
+my_covariates <- cbind(my_covariates[, 1:2], missForest(my_covariates[, 3:19])[["ximp"]])
+```
+
+## Explanatory variables at country-pair level
+
+```{r}
+load("pairs.RData")
+```
+
+# Emigration and immigration rates by country
+
+Using `mig_data`, obtain the inflow and outflow by country with the reverse negative method.
+
+```{r}
+inflow <- aggregate(mig_data$reverse_neg, by = list(mig_data$dest), FUN = sum)
+inflow <- inflow %>% rename("CountryCode" = "Group.1", "inflow" = "x")
+outflow <- aggregate(mig_data$reverse_neg, by = list(mig_data$origin), FUN = sum)
+outflow <- outflow %>% rename("CountryCode" = "Group.1", "outflow" = "x")
+```
+
+Merge to `my_covariates` and `contours`.
+
+```{r, results='hide', warning=FALSE, message=FALSE}
+my_covariates <- left_join(inflow, my_covariates)
+my_covariates <- left_join(outflow, my_covariates)
+contours <- left_join(my_covariates, contours)
+```
+
+We have no covariate data on ESH, GLP, GUF, MTQ, MYT, and REU. Also, no shape data for CHI and CUW. So they will all have to be removed.
+
+```{r}
+contours <- subset(contours, !(CountryCode %in% c("ESH", "GLP", "GUF", "MTQ", "MYT", "REU", "CHI", "CUW")))
+```
+
+Finally, remove duplicate rows for PRT and PSE.
+
+```{r}
+contours <- contours[!duplicated(contours$CountryCode), ]
+```
+
+We end up with the correct number of rows, 192.
+
+```{r, echo=T}
+n_distinct(contours$CountryCode)
+```
+
+Then create variables `emigrates`, `immigrates`, and `net`.
+
+```{r}
+contours <- contours %>% 
+  mutate(emigrates = outflow / population,
+         immigrates = inflow / population,
+         net = emigrates - immigrates,
+         .after = inflow)
+```
+
+We obtain the correlation plot between the dependent and explanatory variables. We see that the correlations are intuitive, with immigration being positively correlated with GDP per capita, financial development, political stability, etc. Inflation and conflict are positively correlated with emigration. Interestingly, precipitation is negatively correlated with both immigration and emigration, suggesting that there is little or no movement in and out of rainy countries. This can be rationalized by the notion that the most rainy places on earth have low population densities in the first place. Furthermore, there is a slightly positive correlation between `emigrates` and `immigrates`, suggesting that countries with more of either are likely to have more movement in general.
+
+```{r, warning=FALSE}
+vars <- c("deflactor", "lifeexp", "dummyEarthquake", "dummyFlood", "dummyStorm", "GDPpercapita_UN", "FD", "population", "politicalstability", "landlocked", "conflictpercapita", "vulnerability", "prec_3days", "heat_wave", "dry_wave", "emigrates", "immigrates")
+x <- cor(select(contours, vars))
+corrplot(subset(x, select = c(emigrates, immigrates)), is.corr = F, cl.pos = "r", cl.ratio = 1, cl.align.text = "l")
+```
+
+Let us plot `emigrates`.
+
+```{r}
+contours <- st_as_sf(contours)
+ggplot(contours) +
+  geom_sf(aes(fill = emigrates)) +
+  scale_fill_continuous(low = "white", high = "red")
+```
+
+Now plot `immigrates`.
+
+```{r}
+ggplot(contours) +
+  geom_sf(aes(fill = immigrates))
+```
+
+Finally, plot `net`.
+
+```{r}
+ggplot(contours) +
+  geom_sf(aes(fill = outflows - inflows))
+```

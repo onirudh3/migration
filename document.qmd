@@ -20,6 +20,7 @@ library(sf)
 library(missForest)
 library(corrplot)
 library(ggplot2)
+library(spdep)
 ```
 
 Some housekeeping.
@@ -123,8 +124,7 @@ Let us plot `emigrates`.
 ```{r}
 contours <- st_as_sf(contours)
 ggplot(contours) +
-  geom_sf(aes(fill = emigrates)) +
-  scale_fill_continuous(low = "white", high = "red")
+  geom_sf(aes(fill = emigrates))
 ```
 
 Now plot `immigrates`.
@@ -138,5 +138,38 @@ Finally, plot `net`.
 
 ```{r}
 ggplot(contours) +
-  geom_sf(aes(fill = outflows - inflows))
+  geom_sf(aes(fill = net))
+```
+
+Let's define a spatial weight matrix based on 4 nearest neighbors.
+
+```{r}
+contours_geo <- st_geometry(contours)
+contours_cen <- st_coordinates(st_centroid(contours_geo))
+contours_4nnb <- knn2nb(knearneigh(contours_cen, 4))
+plot(contours_geo)
+plot(contours_4nnb, contours_cen, add = T)
+```
+
+Moran scatter plot for `emigrates`. The countries with important spatial autocorrelation in HH cluster are Venezuela, Western Samoa, Moldova, among others. The Moran I test indicates significant positive spatial autocorrelation.
+
+```{r}
+emigrates <- contours$emigrates
+emigrates <- emigrates - mean(emigrates)
+W_contours <- nb2listw(contours_4nnb)
+moran.plot(emigrates, W_contours, labels = contours$CountryName)
+
+# Moran test
+moran.test(emigrates, W_contours)
+```
+
+Moran scatter plot for `immigrates`. The Moran I test indicates significant positive spatial autocorrelation.
+
+```{r}
+immigrates <- contours$immigrates
+immigrates <- immigrates - mean(immigrates)
+moran.plot(immigrates, W_contours, labels = contours$CountryName)
+
+# Moran test
+moran.test(immigrates, W_contours)
 ```

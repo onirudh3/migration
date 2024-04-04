@@ -38,6 +38,10 @@ load("mig_data.RData")
 mig_data <- subset(mig_data, period == "2015-2020") # Reference period is 2015-2020
 ```
 
+I use the reverse negative method for migrant flows. Unlike traditional methods, it doesn't discard negative values but interprets them as reverse migration flows. By treating negative stock differences as indicative of migration reversals, it accounts for phenomena like mortality or circular migration. This method, employed by researchers like Beine and Parsons (2015), transforms negative flows from one country to another into returns to the country of origin.
+
+The map corresponding to this method shows significant flows around the world. The information aligns with what we can expect currently. Some salient observations -- big inflows to Europe and the USA, a concentration of movement in the northern part of South America, Inflows to the Middle East from large parts of South-East Asia, and relatively low mobility in Africa. Compared to some of the other maps (such as Pseudo-Bayes or Minimization Close) the reverse negative appears to offer a more parsimonious estimation of flows, so we can see low flow rates that are otherwise identified in much larger magnitude in other maps. Overall, the different maps paint the same picture.
+
 ## Contours data
 
 I import the [shapefile data](https://public.opendatasoft.com/api/explore/v2.1/catalog/datasets/world-administrative-boundaries/exports/shp?lang=en&timezone=Europe%2FBerlin) and transform the coordinate reference system.
@@ -186,7 +190,7 @@ moran.test(immigrates, W_contours)
 
 ## OLM
 
-Now I fit the OLM on `emigrates` and `immigrates`. For `emigrates`, it is observed that the highly significant explanatory variables are inflation, per capita conflicts, precipitation and dry wave. All the effect sizes are small apart from conflicts, which is large in magnitude. A unit increase in conflicts per capita appears to drive `emigrates` by 43.406 units.
+Now I fit the OLM on `emigrates` and `immigrates`. For `emigrates`, it is observed that the highly significant explanatory variables are inflation, per capita conflicts, precipitation and dry wave. All the effect sizes are small apart from conflicts, which is large in magnitude. A unit increase in conflicts per capita appears to drive `emigrates` by a magnitude of more than 40 units.
 
 ```{r, results = "asis", warning=FALSE}
 # Define formulas
@@ -340,6 +344,7 @@ outflow <- aggregate(mig_data$reverse_neg, by = list(mig_data$origin), FUN = sum
 outflow <- outflow %>% rename("CountryCode" = "Group.1", "outflow" = "x")
 
 # Merge
+my_covariates <- subset(my_covariates, select = -c(inflow, outflow))
 my_covariates <- left_join(inflow, my_covariates)
 my_covariates <- left_join(outflow, my_covariates)
 contours <- left_join(my_covariates, contours)
@@ -353,3 +358,70 @@ contours <- contours %>%
 ```
 
 ### Emigrates
+
+```{r}
+# Testing strategy
+summary(lm.LMtests(lm(emigrates_formula, data = contours), W_contours, test = "all"))
+```
+
+So the LAG model is more appropriate.
+
+```{r, results = "asis"}
+# LAG model
+lagm <- lagsarlm(emigrates_formula, data = contours, listw = W_contours, tol.solve = 10 ^ (-26))
+
+# Table
+stargazer(lagm, type = "html", single.row = T, title = "Emigrates LAG model for period 1990-1995")
+
+# Impacts
+impacts(lagm, listw = W_contours)
+```
+
+For the 2015-2020 period, the LAG model impacts were very similar for the climatic variables. But it is important to note that the covariates were the same in the estimation using either period, which is not the correct way to do econometrics. Since I do not know if the values of the covariates are an average of the respective variables over the entire period of the migration data, we would ideally like to have period specific values for an accurate estimation.
+
+### Immigrates
+
+```{r}
+# Testing strategy
+summary(lm.LMtests(lm(immigrates_formula, data = contours), W_contours, test = "all"))
+```
+
+So the LAG is more appropriate here, but recall that SDM and LAG provided similar results for the period 2015-2020.
+
+```{r, results = "asis"}
+# LAG model
+lagm <- lagsarlm(immigrates_formula, data = contours, listw = W_contours, tol.solve = 10 ^ (-26))
+
+# Table
+stargazer(lagm, type = "html", single.row = T, title = "Immigrates LAG model for period 1990-1995")
+
+# Impacts
+impacts(lagm, listw = W_contours)
+```
+
+Compared to the impacts for the period 2015-2020, here we see that vulnerability has a positive effect on immigration. The sign is also opposite for dry wave, but the magnitudes are very small for it as well as for precipitation and heat wave.
+
+# Bilateral migration flows
+
+I obtain the combinations of different countries present in `contours`.
+
+```{r}
+df <- subset(contours, select = c(CountryCode, deflactor, lifeexp, GDPpercapita_UN, population, FD, politicalstability, landlocked, dummyEarthquake, dummyStorm, dummyFlood, Events, Fatalities, conflictpercapita, vulnerability, prec_3days, heat_wave, dry_wave, geometry))
+
+combinations <- expand.grid(origin = df$CountryCode, dest = df$CountryCode)
+
+combinations <- subset(combinations, origin != dest)
+
+combinations <- merge(combinations, df, by.x = "origin", by.y = "CountryCode", all.x = T)
+colnames(combinations)[3:20] <- paste("O_", colnames(combinations[, c(3:20)]), sep = "")
+
+combinations <- merge(combinations, df, by.x = "dest", by.y = "CountryCode", all.x = T)
+colnames(combinations)[21:38] <- paste("D_", colnames(combinations[, c(21:38)]), sep = "")
+```
+
+Calculating the distance between the origin and destination.
+
+```{r}
+balls <- combinations %>%
+  mutate(distance = st_distance(st_centroid(O_geometry), st_centroid(D_geometry)))
+```
